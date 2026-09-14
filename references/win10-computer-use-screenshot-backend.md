@@ -309,3 +309,27 @@ The later Store upgrade to Desktop `26.715.3651.0` (the same `codex-cli 0.145.0-
 These are upgrade-repair regression checks for the `0.4.20` profile. The deeper end-to-end helper validations were performed on Desktop `26.707.12708.0` for `0.4.20`, Desktop `26.721.4979.0` for `0.5.2`, Desktop `26.803.10989.0` for `0.6.6`, Desktop `26.810.6296.0` and `26.810.7004.0` for the two `0.6.11` hashes, and Desktop `26.814.5167.0` for `0.6.16`; each complete helper hash pair, not a Desktop version by itself, remains the compatibility boundary.
 
 Repeated static captures can appear as alternating complete/black composites in the conversation renderer. In the validated run, every underlying static image data URL had the same length and SHA-256, so that presentation artifact was not a corrupted helper frame.
+
+### `@oai/sky 0.6.32` helper `BAD605EF` / Desktop 26.908.4834.0 validation
+
+Desktop `26.908.4834.0` ships `@oai/sky 0.6.32` with a new `1,549,616`-byte helper, complete SHA-256 `BAD605EF7A800D2E2EBE2D9205DB6F9AB73EF193524392F5CAA1FA2E1A0DAE2C`. On Windows 10 build `19045`, this build reproduces the same screenshot failure signature (`SetIsBorderRequired failed: 不支持此接口 (0x80004002)`). The prior `0.6.26` profile was not reused by version number alone: the required `SkyVersion` match fails (`0.6.32` vs `0.6.26`), and the patcher correctly reported `State: unsupported` for the new hash. The `0.6.32` helper is the same `1,549,616`-byte image size as the validated `935D23E1` (`0.6.26`) helper.
+
+- The same five guarded regions that distinguish the `0.6.26` profile were re-read from the `0.6.32` binary and matched the profile's original bytes byte-for-byte at the same file offsets:
+  - `optional-border-interface` at `0x0003D7AC` (`4889c64189d6eb4c`),
+  - `frame-arrived-busy-return` at `0x000413D0` (`0f855b310000`),
+  - `frame-arrived-once-flag` at `0x000413E1` (`740d`),
+  - `mta-worker-wrapper` at `0x00126700` (169 zero bytes),
+  - `frame-arrived-vtable` at `0x0012C4B8` (`9b1f044001000000`).
+- The wrapper virtual address is `0x140127300` (raw offset `0x00126700` with the `+0xC00` image-base offset). Capstone disassembly resolved the same four IAT slots used by the validated profiles (`CreateThread`, `CloseHandle`, `RoInitialize`, `RoUninitialize`) and the single `call` back into the original `FrameArrived` callback at `0x140041F9B`; the vtable entry confirms the callback address. PE section geometry confirms the wrapper falls into executable `.text` tail padding, so no section-header rewrite is needed.
+- The guarded rewrite produces complete candidate SHA-256 `977D265B145232BA30B2916D8DED6D9B30037A084CF8A90EBBEDACEC91FCBEAC`; the patcher's `-ComputeCandidateHash` reproduced it exactly.
+- The contributor reported a local install on Windows 10 build `19045` that stored the original at `.codex\backups\computer-use-helper\26.908.4834.0-sky-0.6.32-BAD605EF\codex-computer-use.exe.original`, then verified the complete patched hash. That establishes an install/hash result, not screenshot acceptance. `EndToEndValidatedDesktopVersion` is therefore `null` for this profile until cold/static/dynamic capture acceptance is recorded.
+
+This profile is an exact input/output hash pair derived from the validated `0.6.26` guarded-code layout. Real cold/static/dynamic Computer Use capture validation on this build should be run to complete the end-to-end evidence when a fresh session is available.
+
+The profile has an explicit regression entry:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\test-computer-use-helper-win10-patch.ps1" -SkyVersion '0.6.32-BAD605EF'
+```
+
+The regression validates the exact original and candidate hashes, unknown-hash rejection, and the platform guard using a temporary helper copy. On Windows 11 it must reject installation and leave that copy unchanged; it does not perform or claim Windows 10 capture acceptance. It also asserts that the pending end-to-end validation field remains empty.
