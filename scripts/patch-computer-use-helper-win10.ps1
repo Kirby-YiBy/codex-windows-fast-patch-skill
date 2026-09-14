@@ -1066,18 +1066,19 @@ $PatchProfiles = @(
       }
     )
   },
-  # Desktop 26.908.4834.0 ships @oai/sky 0.6.32. Its helper is the validated
-  # 0.6.26 code re-signed: the whole binary is 1549616 bytes and all five region
+  # Desktop 26.908.4834.0 ships @oai/sky 0.6.32. The whole binary is
+  # 1549616 bytes and all five guarded region
   # bodies read their expected OriginalHex at the exact 0.6.26 offsets
   # (0x0003D7AC / 0x000413D0 / 0x000413E1 / 0x00126700 / 0x0012C4B8). The
-  # wrapper blob at rva 0x140127300 resolves to the original FrameArrived
+  # wrapper blob at VA 0x140127300 resolves to the original FrameArrived
   # callback at 0x140041F9B and the same four IAT thunks (CreateThread
   # 0x177018, CloseHandle 0x176FD8, RoInitialize 0x176F30,
   # RoUninitialize 0x176F38), so every offset and hex string is reused verbatim
   # from the 0.6.26 entries; only the whole-file hashes and version string move.
   [ordered]@{
     Name = '@oai/sky 0.6.32 helper BAD605EF / Windows 10 screenshot backend'
-    ValidatedDesktopVersion = '26.908.4834.0'
+    # Exact hashes and guarded regions are checked; Windows 10 capture acceptance is pending.
+    ValidatedDesktopVersion = $null
     SkyVersion = '0.6.32'
     OriginalSha256 = 'BAD605EF7A800D2E2EBE2D9205DB6F9AB73EF193524392F5CAA1FA2E1A0DAE2C'
     PatchedSha256 = '977D265B145232BA30B2916D8DED6D9B30037A084CF8A90EBBEDACEC91FCBEAC'

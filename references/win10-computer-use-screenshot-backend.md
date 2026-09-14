@@ -322,6 +322,14 @@ Desktop `26.908.4834.0` ships `@oai/sky 0.6.32` with a new `1,549,616`-byte help
   - `frame-arrived-vtable` at `0x0012C4B8` (`9b1f044001000000`).
 - The wrapper virtual address is `0x140127300` (raw offset `0x00126700` with the `+0xC00` image-base offset). Capstone disassembly resolved the same four IAT slots used by the validated profiles (`CreateThread`, `CloseHandle`, `RoInitialize`, `RoUninitialize`) and the single `call` back into the original `FrameArrived` callback at `0x140041F9B`; the vtable entry confirms the callback address. PE section geometry confirms the wrapper falls into executable `.text` tail padding, so no section-header rewrite is needed.
 - The guarded rewrite produces complete candidate SHA-256 `977D265B145232BA30B2916D8DED6D9B30037A084CF8A90EBBEDACEC91FCBEAC`; the patcher's `-ComputeCandidateHash` reproduced it exactly.
-- Local live install on Windows 10 build `19045` stored the original at `.codex\backups\computer-use-helper\26.908.4834.0-sky-0.6.32-BAD605EF\codex-computer-use.exe.original`, then verified the complete patched hash. A read-only run reports `State: patched` and `EndToEndValidatedDesktopVersion` equal to `CurrentDesktopVersion` (`26.908.4834.0`).
+- The contributor reported a local install on Windows 10 build `19045` that stored the original at `.codex\backups\computer-use-helper\26.908.4834.0-sky-0.6.32-BAD605EF\codex-computer-use.exe.original`, then verified the complete patched hash. That establishes an install/hash result, not screenshot acceptance. `EndToEndValidatedDesktopVersion` is therefore `null` for this profile until cold/static/dynamic capture acceptance is recorded.
 
 This profile is an exact input/output hash pair derived from the validated `0.6.26` guarded-code layout. Real cold/static/dynamic Computer Use capture validation on this build should be run to complete the end-to-end evidence when a fresh session is available.
+
+The profile has an explicit regression entry:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\test-computer-use-helper-win10-patch.ps1" -SkyVersion '0.6.32-BAD605EF'
+```
+
+The regression validates the exact original and candidate hashes, unknown-hash rejection, and the platform guard using a temporary helper copy. On Windows 11 it must reject installation and leave that copy unchanged; it does not perform or claim Windows 10 capture acceptance. It also asserts that the pending end-to-end validation field remains empty.
