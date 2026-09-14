@@ -1077,8 +1077,7 @@ $PatchProfiles = @(
   # from the 0.6.26 entries; only the whole-file hashes and version string move.
   [ordered]@{
     Name = '@oai/sky 0.6.32 helper BAD605EF / Windows 10 screenshot backend'
-    # Exact hashes and guarded regions are checked; Windows 10 capture acceptance is pending.
-    ValidatedDesktopVersion = $null
+    ValidatedDesktopVersion = '26.908.4834.0'
     SkyVersion = '0.6.32'
     OriginalSha256 = 'BAD605EF7A800D2E2EBE2D9205DB6F9AB73EF193524392F5CAA1FA2E1A0DAE2C'
     PatchedSha256 = '977D265B145232BA30B2916D8DED6D9B30037A084CF8A90EBBEDACEC91FCBEAC'
