@@ -434,14 +434,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_co
 powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyBundledMarketplaceCopy -Install -Launch -InstallPrerequisites -OutputRoot "<large-local-build-root>"
 ```
 
-If the local Computer Use runtime has passed `install-computer-use-local.ps1 -StrictVerifyOnly` but the Desktop still exposes no `cua.computer.*` surface, use the targeted main-ASAR mode below. It is intentionally separate from the broader Fast Mode/browser/plugin patch set:
+If the local Computer Use runtime has passed `install-computer-use-local.ps1 -StrictVerifyOnly` but the Desktop still exposes no `cua.computer.*` surface, first inspect the current ASAR for both supported Darwin-only gates. Only when both are present, use the targeted main-ASAR mode below. It is intentionally separate from the broader Fast Mode/browser/plugin patch set:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyComputerUseSurface -DryRun -OutputRoot "<large-local-build-root>"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyComputerUseSurface -Install -Launch -InstallPrerequisites -OutputRoot "<large-local-build-root>"
 ```
 
-The mode selects the `.vite\build` target by stable content, requires exactly one occurrence of both current Darwin-only anchors, writes `CODEX_CUA_WINDOWS_SURFACE_V1`, and runs `node --check`. Unknown or duplicate layouts fail closed. It changes only the extracted/repacked `app.asar`; it does not edit plugin cache files, `.mcp.json`, or user configuration. On Windows, validate with `cua.computer.list_apps`, `cua.computer.list_windows`, `cua.computer.get_window`, and `get_window_state({ include_screenshot: true, include_text: true })`; do not use the macOS-only `cua.getApp` result as the acceptance criterion.
+The mode requires exactly one content-matched `.vite\build` target and one occurrence of each original gate. Idempotency requires both complete patched gates, one `CODEX_CUA_WINDOWS_SURFACE_V1` marker, and no original gates; a marker alone, mixed state, or duplicate candidate fails closed. The Windows branch still requires the existing `computerUse` and `computerUseNodeRepl` feature flags, while Darwin behavior remains unchanged. The patched asset must pass `node --check`. This mode skips the unrelated Chrome registry patch and rejects combinations with other targeted modes, marketplace registration, or Fast Mode verification. It does not edit plugin cache files, `.mcp.json`, or user configuration. Normal repacking still updates the copied package's ASAR integrity metadata and signature; installation/relaunch must run from an external executor.
+
+Fixture success and an installed-package dry run do not establish real Desktop acceptance. After relaunch, validate the Windows window-based API with the current runtime's documented argument shapes: `cua.computer.list_apps`, `cua.computer.list_windows`, `cua.computer.get_window`, and `get_window_state` with the selected `window`, `include_screenshot: true`, and `include_text: true`. Record real approval UI, inspected screenshot content, and accessibility results separately; do not use the macOS-only `cua.getApp` result as the acceptance criterion.
 
 ## Useful Wrapper Options
 

@@ -36,8 +36,8 @@ Do not run it on macOS. A macOS version needs a separate workflow for the Codex 
 - `agents/openai.yaml`: Agent configuration.
 - `scripts/repatch-codex-windows.ps1`: Workflow reference script.
 - `scripts/patch_codex_fast_mode_windows_msix.ps1`: MSIX / ASAR patch reference implementation.
-- `scripts/patch_codex_fast_mode_windows_msix.ps1 -OnlyComputerUseSurface`: targeted repair for the current Desktop main-ASAR Darwin-only Computer Use surface gate on Windows. It selects the bundle by content, requires each anchor exactly once, verifies a marker, and runs `node --check`; unknown or duplicate layouts fail closed.
-- `scripts/test-computer-use-surface-patterns.ps1`: isolated regression coverage for the Windows CUA surface ASAR patcher, including the current layout, idempotency, unknown layouts, and duplicate-anchor rejection.
+- `scripts/patch_codex_fast_mode_windows_msix.ps1 -OnlyComputerUseSurface`: targeted repair for the supported Desktop main-ASAR Darwin-only Computer Use surface gate on Windows. It requires one content-matched bundle and complete unique patch blocks, preserves Darwin behavior and Windows feature flags, skips unrelated Chrome changes, and runs `node --check`; unknown, partial, or duplicate layouts fail closed. Do not combine it with other targeted modes, marketplace registration, or Fast Mode verification.
+- `scripts/test-computer-use-surface-patterns.ps1`: isolated regression coverage for the Windows CUA surface ASAR patcher, including 120 platform/feature cases, idempotency, partial/duplicate rejection, target ambiguity, mode isolation, and ASAR runner fallback. These checks do not replace real Desktop approval and screenshot acceptance.
 - `scripts/patch-dynamic-tools-windows-msix.ps1`: Targeted MSIX / ASAR repair for Desktop `dynamicTools` schema drift that causes `missing field inputSchema` on new chat/thread start.
 - `scripts/patch-dynamic-tools-schema.cjs`: Electron bundle patcher used by the dynamicTools MSIX script.
 - `scripts/patch-remote-control-windows-msix.ps1`: Phone remote-control MSIX / ASAR patch and marker verification reference implementation.

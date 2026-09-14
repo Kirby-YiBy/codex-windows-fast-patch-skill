@@ -73,7 +73,7 @@ Symptoms:
 Checks:
 
 - Confirm that the local runtime and helper pipe are healthy before touching the Desktop package. This ASAR case is only for a UI surface gate, not a missing runtime or broken helper.
-- Extract the current `app.asar` and search `.vite\build\*.js` by content for `CUA_REPL_ENABLED_SURFACES`, `cuaReplSurfaces`, `computerUseNodeRepl`, `serviceAppPath!=null`, and `platform===\`darwin\``.
+- Extract the current `app.asar` and search `.vite\build\*.js` by content for `CUA_REPL_ENABLED_SURFACES`, `cuaReplSurfaces`, `computerUseNodeRepl`, `serviceAppPath!=null`, and the Darwin-only platform comparison. Require a unique candidate file rather than taking the first match.
 - Inspect both independent conditions: the bundled Computer Use plugin exposure check and the generated CUA surface list. Fixing only one leaves the surface unavailable.
 
 Action:
@@ -84,9 +84,11 @@ Action:
 powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyComputerUseSurface -DryRun -OutputRoot "<large-local-build-root>"
 ```
 
-- Install from an external executor only after the dry run identifies both anchors. The patcher requires each anchor exactly once, writes `CODEX_CUA_WINDOWS_SURFACE_V1`, runs `node --check`, and refuses unknown or ambiguous layouts.
+- Install from an external executor only after the dry run identifies both anchors. The patcher requires each original anchor exactly once, preserves Darwin behavior and Windows feature flags, and runs `node --check`. An already-patched result requires both complete unique patched gates and exactly one `CODEX_CUA_WINDOWS_SURFACE_V1` marker, with no original gates left; marker-only, partial, mixed, and duplicate layouts are rejected unchanged.
+- Do not combine `-OnlyComputerUseSurface` with other targeted modes, marketplace registration, or Fast Mode verification. This mode skips the unrelated Chrome registry patch; ordinary MSIX repacking still updates integrity metadata and signs the copied package.
 - After relaunch, validate the Windows window-based API (`cua.computer.list_apps`, `cua.computer.list_windows`, `cua.computer.get_window`, and `get_window_state` with screenshot/text) rather than treating the macOS-only `cua.getApp` entry point as the success criterion.
 - Do not edit `C:\Program Files\WindowsApps` in place, and do not confuse this package-level fix with the separate plugin-cache surface lock repair.
+- Report fixture tests and read-only installed-package inspection separately from actual Desktop restart, approval UI, accessibility, and inspected screenshot acceptance. Offline checks alone do not establish those runtime results.
 
 ## New Chat Fails With Missing inputSchema
 

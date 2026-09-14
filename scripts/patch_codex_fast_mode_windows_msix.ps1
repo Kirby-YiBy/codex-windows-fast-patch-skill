@@ -40,6 +40,14 @@ function Fail {
   throw "$LogPrefix error: $Message"
 }
 
+function Assert-ComputerUseSurfaceOptions {
+  if ($OnlyComputerUseSurface -and
+      ($OnlyBundledMarketplaceCopy -or $OnlyModelExperience -or
+       $AddLocalPluginMarketplace -or $VerifyFastModeRequest)) {
+    Fail '-OnlyComputerUseSurface cannot be combined with other targeted modes, marketplace registration, or Fast Mode verification'
+  }
+}
+
 function Test-IsAdministrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -1692,11 +1700,6 @@ const file = process.argv[2];
 const text = fs.readFileSync(file, 'utf8');
 const marker = 'CODEX_CUA_WINDOWS_SURFACE_V1';
 
-if (text.includes(marker)) {
-  process.stdout.write('already-patched');
-  process.exit(0);
-}
-
 // Current Desktop bundles carry two independent Darwin-only checks: one for
 // exposing the computer-use plugin and one for generating the CUA surface list.
 // The Windows helper is supplied by the local CUA runtime, so both checks must
@@ -1704,12 +1707,12 @@ if (text.includes(marker)) {
 const originalPluginGate = 'if(!r.installed||i==null||a&&e.platform!==`darwin`)return null;';
 const patchedPluginGate = 'if(!r.installed||i==null||a&&(e.platform!==`darwin`&&e.platform!==`win32`))return null;';
 const originalSurfaceGate = 'p=f&&l.platform===`darwin`&&t.computerUse&&u.enabled&&u.paths.serviceAppPath!=null';
-const patchedSurfaceGate = 'p=f&&t.computerUse&&t.computerUseNodeRepl&&(l.platform===`win32`||l.platform===`darwin`&&u.enabled&&u.paths.serviceAppPath!=null)';
+const patchedSurfaceGate = 'p=f&&(l.platform===`darwin`&&t.computerUse&&u.enabled&&u.paths.serviceAppPath!=null||l.platform===`win32`&&t.computerUse&&t.computerUseNodeRepl)';
 
-function count(value) {
+function count(value, source = text) {
   let total = 0;
   let cursor = 0;
-  while ((cursor = text.indexOf(value, cursor)) !== -1) {
+  while ((cursor = source.indexOf(value, cursor)) !== -1) {
     total += 1;
     cursor += value.length;
   }
@@ -1718,6 +1721,18 @@ function count(value) {
 
 const pluginCount = count(originalPluginGate);
 const surfaceCount = count(originalSurfaceGate);
+const markerCount = count(marker);
+const patchedPluginCount = count(patchedPluginGate);
+const patchedSurfaceCount = count(patchedSurfaceGate);
+if (markerCount || patchedPluginCount || patchedSurfaceCount) {
+  if (markerCount === 1 && patchedPluginCount === 1 && patchedSurfaceCount === 1 &&
+      pluginCount === 0 && surfaceCount === 0) {
+    process.stdout.write('already-patched');
+    process.exit(0);
+  }
+  process.stderr.write('incomplete or ambiguous CUA surface patch; refusing to modify the asset\n');
+  process.exit(2);
+}
 if (pluginCount !== 1 || surfaceCount !== 1) {
   process.stderr.write(`current CUA surface anchors not found exactly once: plugin=${pluginCount} surface=${surfaceCount}\n`);
   process.exit(2);
@@ -1727,8 +1742,9 @@ const next = text
   .replace(originalPluginGate, `${patchedPluginGate}/*${marker}*/`)
   .replace(originalSurfaceGate, patchedSurfaceGate);
 
-if (!next.includes(marker) || !next.includes('l.platform===`win32`') ||
-    !next.includes('t.computerUseNodeRepl')) {
+if (count(marker, next) !== 1 || count(patchedPluginGate, next) !== 1 ||
+    count(patchedSurfaceGate, next) !== 1 || count(originalPluginGate, next) !== 0 ||
+    count(originalSurfaceGate, next) !== 0) {
   process.stderr.write('current CUA surface patch verification failed\n');
   process.exit(3);
 }
@@ -2240,6 +2256,29 @@ function Invoke-NodePatcher {
   return ($output -join "`n").Trim()
 }
 
+function Find-ComputerUseSurfaceTarget {
+  param([string]$ExtractDir)
+  $viteBuildDir = Join-Path $ExtractDir '.vite\build'
+  if (-not (Test-Path -LiteralPath $viteBuildDir -PathType Container)) {
+    Fail "vite build directory not found in extracted asar: $viteBuildDir"
+  }
+  $candidates = @(foreach ($candidate in (Get-ChildItem -LiteralPath $viteBuildDir -Filter '*.js' -File)) {
+    $text = [IO.File]::ReadAllText($candidate.FullName)
+    if ($text.Contains('CODEX_CUA_WINDOWS_SURFACE_V1') -or
+        ($text.Contains('CUA_REPL_ENABLED_SURFACES') -and
+         $text.Contains('cuaReplSurfaces') -and
+         $text.Contains('computerUseNodeRepl') -and
+         $text.Contains('serviceAppPath!=null') -and
+         $text.Contains('platform===`darwin`'))) {
+      $candidate.FullName
+    }
+  })
+  if ($candidates.Count -ne 1) {
+    Fail "expected exactly one Windows CUA surface-gating target; found $($candidates.Count)"
+  }
+  return $candidates[0]
+}
+
 function Invoke-PatchAppAsar {
   param(
     [string]$WorkAppPath,
@@ -2266,26 +2305,7 @@ function Invoke-PatchAppAsar {
   $patchers = Write-PatcherFiles $WorkDir
 
   if ($OnlyComputerUseSurface) {
-    $viteBuildDir = Join-Path $extractDir '.vite\build'
-    if (-not (Test-Path -LiteralPath $viteBuildDir -PathType Container)) {
-      Fail "vite build directory not found in extracted asar: $viteBuildDir"
-    }
-
-    $computerUseSurfaceTarget = $null
-    foreach ($candidate in (Get-ChildItem -LiteralPath $viteBuildDir -Filter '*.js' -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)) {
-      $text = Get-Content -Raw -LiteralPath $candidate
-      if ($text.Contains('CUA_REPL_ENABLED_SURFACES') -and
-          $text.Contains('cuaReplSurfaces') -and
-          $text.Contains('computerUseNodeRepl') -and
-          $text.Contains('serviceAppPath!=null') -and
-          $text.Contains('platform===`darwin`')) {
-        $computerUseSurfaceTarget = $candidate
-        break
-      }
-    }
-    if ([string]::IsNullOrWhiteSpace($computerUseSurfaceTarget)) {
-      Fail 'could not find current Windows CUA surface-gating target in extracted main bundle'
-    }
+    $computerUseSurfaceTarget = Find-ComputerUseSurfaceTarget $extractDir
 
     Write-Log "Windows CUA surface patch target: $computerUseSurfaceTarget"
     $computerUseSurface = Invoke-NodePatcher $nodePath $patchers.ComputerUseSurface @($computerUseSurfaceTarget)
@@ -2796,6 +2816,10 @@ function Add-LocalMarketplace {
 function Patch-ChromePluginWindowsRegistryParsing {
   param([string]$WorkApp)
 
+  if ($OnlyComputerUseSurface) {
+    return 'skipped-targeted-computer-use-surface'
+  }
+
   $chromePluginRoot = Join-Path $WorkApp 'resources\plugins\openai-bundled\plugins\chrome'
   if (-not (Test-Path -LiteralPath $chromePluginRoot -PathType Container)) {
     return 'not-present'
@@ -3201,6 +3225,7 @@ function Cleanup-WindowsSdk {
   }
 }
 
+Assert-ComputerUseSurfaceOptions
 $OutputRoot = Resolve-OutputRoot -Candidate $OutputRoot -WasExplicit $OutputRootWasExplicit
 $sourceApp = Find-CodexAppPath
 $sourcePackageRoot = Get-PackageRoot $sourceApp
