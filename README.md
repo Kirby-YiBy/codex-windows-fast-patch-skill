@@ -37,6 +37,8 @@
 - `agents/openai.yaml`：Agent UI 元数据。
 - `scripts/repatch-codex-windows.ps1`：主工作流参考脚本。
 - `scripts/patch_codex_fast_mode_windows_msix.ps1`：Fast Mode、插件、浏览器、Computer Use 等 MSIX / ASAR 补丁参考实现。
+- `scripts/patch_codex_fast_mode_windows_msix.ps1 -OnlyComputerUseSurface`：针对当前 Desktop 主 ASAR 中 Windows CUA surface 被 Darwin-only 条件锁死的情况，单独定位并修复 Computer Use surface 暴露门控；会做精确锚点计数、marker 校验和 `node --check`，未知或重复布局直接失败。
+- `scripts/test-computer-use-surface-patterns.ps1`：Windows CUA surface ASAR patcher 的隔离回归测试，覆盖当前布局、幂等、未知布局和重复锚点拒绝。
 - `scripts/patch-dynamic-tools-windows-msix.ps1`：用于修复 Desktop `dynamicTools` schema 漂移导致新建对话 / thread start 报 `missing field inputSchema` 的 targeted MSIX / ASAR 脚本。
 - `scripts/patch-dynamic-tools-schema.cjs`：dynamicTools MSIX 脚本使用的 Electron bundle patcher。
 - `scripts/patch-remote-control-windows-msix.ps1`：手机远控 MSIX / ASAR 补丁和 marker 校验参考实现。

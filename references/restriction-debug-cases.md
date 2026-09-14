@@ -63,6 +63,31 @@ Action:
 - If the unified command registry scores `title`, `id`, and `searchAliases`, `/goal` already matches the Goal command id and the legacy slash-command scorer does not need patching.
 - For the newer plugin page auth shape, force only the local auth-blocked variable to `false`; do not require the old sidebar, skills-page, and detail-page chunks to exist.
 
+## Windows CUA Surface Is Missing After Runtime Verification
+
+Symptoms:
+
+- `install-computer-use-local.ps1 -StrictVerifyOnly` passes and the native helper pipe exists, but a fresh Desktop session still exposes no `cua.computer.*` methods.
+- The plugin/runtime can be imported, while `cua.getApp` or `cua.listApps` remains absent or reports the expected Windows native-app boundary.
+
+Checks:
+
+- Confirm that the local runtime and helper pipe are healthy before touching the Desktop package. This ASAR case is only for a UI surface gate, not a missing runtime or broken helper.
+- Extract the current `app.asar` and search `.vite\build\*.js` by content for `CUA_REPL_ENABLED_SURFACES`, `cuaReplSurfaces`, `computerUseNodeRepl`, `serviceAppPath!=null`, and `platform===\`darwin\``.
+- Inspect both independent conditions: the bundled Computer Use plugin exposure check and the generated CUA surface list. Fixing only one leaves the surface unavailable.
+
+Action:
+
+- Run the targeted patcher in dry-run mode first:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyComputerUseSurface -DryRun -OutputRoot "<large-local-build-root>"
+```
+
+- Install from an external executor only after the dry run identifies both anchors. The patcher requires each anchor exactly once, writes `CODEX_CUA_WINDOWS_SURFACE_V1`, runs `node --check`, and refuses unknown or ambiguous layouts.
+- After relaunch, validate the Windows window-based API (`cua.computer.list_apps`, `cua.computer.list_windows`, `cua.computer.get_window`, and `get_window_state` with screenshot/text) rather than treating the macOS-only `cua.getApp` entry point as the success criterion.
+- Do not edit `C:\Program Files\WindowsApps` in place, and do not confuse this package-level fix with the separate plugin-cache surface lock repair.
+
 ## New Chat Fails With Missing inputSchema
 
 Symptoms:

@@ -434,6 +434,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_co
 powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyBundledMarketplaceCopy -Install -Launch -InstallPrerequisites -OutputRoot "<large-local-build-root>"
 ```
 
+If the local Computer Use runtime has passed `install-computer-use-local.ps1 -StrictVerifyOnly` but the Desktop still exposes no `cua.computer.*` surface, use the targeted main-ASAR mode below. It is intentionally separate from the broader Fast Mode/browser/plugin patch set:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyComputerUseSurface -DryRun -OutputRoot "<large-local-build-root>"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_codex_fast_mode_windows_msix.ps1" -OnlyComputerUseSurface -Install -Launch -InstallPrerequisites -OutputRoot "<large-local-build-root>"
+```
+
+The mode selects the `.vite\build` target by stable content, requires exactly one occurrence of both current Darwin-only anchors, writes `CODEX_CUA_WINDOWS_SURFACE_V1`, and runs `node --check`. Unknown or duplicate layouts fail closed. It changes only the extracted/repacked `app.asar`; it does not edit plugin cache files, `.mcp.json`, or user configuration. On Windows, validate with `cua.computer.list_apps`, `cua.computer.list_windows`, `cua.computer.get_window`, and `get_window_state({ include_screenshot: true, include_text: true })`; do not use the macOS-only `cua.getApp` result as the acceptance criterion.
+
 ## Useful Wrapper Options
 
 - `-DryRun`: verify bundle targets only; no install. Unless `-KeepBuild` is supplied, the wrapper asks the patcher to clean its copied build root after a successful patch stage. Cleanup is best-effort, so inspect the reported path when zero residual data is required; a later wrapper verification can still fail after the patcher has already cleaned its own build root.
@@ -443,6 +452,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$SkillRoot\scripts\patch_co
 - `-KeepBuild`: keep the wrapper's MSIX build root and retained artifacts for debugging after either DryRun or installation. The patcher's internal temporary ASAR work directory still follows its own cleanup policy.
 - `-OutputRoot <path>`: optional large local build root; use it when the default output root is short on space, points at a broken junction, or should be kept off the system drive.
 - `-OnlyBundledMarketplaceCopy`: patch only the Desktop bundled marketplace copy/helper availability path so Windows falls back to byte-stream copying when `fs.cp()` cannot copy bundled plugin files from WindowsApps-protected package paths, and so `sites` remains locally available when bundled availability filtering would otherwise remove it. Use this for restart-time bundled marketplace sync failures that uninstall `sites`, `browser`, or `chrome`, not for general Fast Mode or UI gates.
+- `-OnlyComputerUseSurface`: patch only the current main-ASAR Darwin-only Windows Computer Use surface gate. Use `-DryRun` first; it fails closed when the bundle anchors are missing or ambiguous.
 - `-OnlyModelExperience`: inspect and selectively repair the Fast Mode request gate, Fast Mode UI gate, custom model visibility filter, compact Power slider gate, and Ultra setting persistence together. Use this for Fast Mode, hidden custom models, the dependent compact Power slider, and a disabled Ultra toggle under custom providers. The legacy `-OnlyCustomModels` name is retained as an alias.
 - `-SkipSdkCleanup`: leave Windows SDK installed.
 - `-RegisterMarketplaceOnly`: only register `openai-curated-local`; do not patch Codex.

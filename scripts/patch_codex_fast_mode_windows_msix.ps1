@@ -15,6 +15,7 @@ param(
   [string[]]$CustomModels = @('gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'),
   [switch]$VerifyFastModeRequest,
   [switch]$OnlyBundledMarketplaceCopy,
+  [switch]$OnlyComputerUseSurface,
   [Alias('OnlyCustomModels')]
   [switch]$OnlyModelExperience,
   [switch]$DryRun
@@ -602,10 +603,18 @@ function Invoke-NpxAsar {
     [string]$Source,
     [string]$Target
   )
-  $npx = (Get-RequiredCommand 'npx').Source
-  & $npx --yes asar $Action $Source $Target
+  $npx = Get-Command npx -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($npx) {
+    & $npx.Source --yes asar $Action $Source $Target
+  } else {
+    # Codex's bundled Windows runtime can include pnpm and node without the
+    # npm/npx shims. Keep npx as the preferred path, but make ASAR extraction
+    # usable from that supported runtime layout as well.
+    $pnpm = (Get-RequiredCommand 'pnpm').Source
+    & $pnpm dlx asar $Action $Source $Target
+  }
   if ($LASTEXITCODE -ne 0) {
-    Fail "npx asar $Action failed with exit code $LASTEXITCODE"
+    Fail "ASAR $Action failed with exit code $LASTEXITCODE"
   }
 }
 
@@ -653,6 +662,7 @@ function Write-PatcherFiles {
   $browserUsePatcherPath = Join-Path $WorkDir 'PatchBrowserUseGates.cjs'
   $bundledMarketplaceCopyPatcherPath = Join-Path $WorkDir 'PatchBundledMarketplaceCopy.cjs'
   $nodeReplTrustedPathsPatcherPath = Join-Path $WorkDir 'PatchNodeReplTrustedPaths.cjs'
+  $computerUseSurfacePatcherPath = Join-Path $WorkDir 'PatchComputerUseSurface.cjs'
 
   Set-Content -LiteralPath $fastPatcherPath -Encoding UTF8 -Value @'
 const fs = require('node:fs');
@@ -1676,6 +1686,57 @@ fs.writeFileSync(file, next);
 process.stdout.write('patched');
 '@
 
+  Set-Content -LiteralPath $computerUseSurfacePatcherPath -Encoding UTF8 -Value @'
+const fs = require('node:fs');
+const file = process.argv[2];
+const text = fs.readFileSync(file, 'utf8');
+const marker = 'CODEX_CUA_WINDOWS_SURFACE_V1';
+
+if (text.includes(marker)) {
+  process.stdout.write('already-patched');
+  process.exit(0);
+}
+
+// Current Desktop bundles carry two independent Darwin-only checks: one for
+// exposing the computer-use plugin and one for generating the CUA surface list.
+// The Windows helper is supplied by the local CUA runtime, so both checks must
+// admit win32 before the plugin can expose the window-based cua.computer API.
+const originalPluginGate = 'if(!r.installed||i==null||a&&e.platform!==`darwin`)return null;';
+const patchedPluginGate = 'if(!r.installed||i==null||a&&(e.platform!==`darwin`&&e.platform!==`win32`))return null;';
+const originalSurfaceGate = 'p=f&&l.platform===`darwin`&&t.computerUse&&u.enabled&&u.paths.serviceAppPath!=null';
+const patchedSurfaceGate = 'p=f&&t.computerUse&&t.computerUseNodeRepl&&(l.platform===`win32`||l.platform===`darwin`&&u.enabled&&u.paths.serviceAppPath!=null)';
+
+function count(value) {
+  let total = 0;
+  let cursor = 0;
+  while ((cursor = text.indexOf(value, cursor)) !== -1) {
+    total += 1;
+    cursor += value.length;
+  }
+  return total;
+}
+
+const pluginCount = count(originalPluginGate);
+const surfaceCount = count(originalSurfaceGate);
+if (pluginCount !== 1 || surfaceCount !== 1) {
+  process.stderr.write(`current CUA surface anchors not found exactly once: plugin=${pluginCount} surface=${surfaceCount}\n`);
+  process.exit(2);
+}
+
+const next = text
+  .replace(originalPluginGate, `${patchedPluginGate}/*${marker}*/`)
+  .replace(originalSurfaceGate, patchedSurfaceGate);
+
+if (!next.includes(marker) || !next.includes('l.platform===`win32`') ||
+    !next.includes('t.computerUseNodeRepl')) {
+  process.stderr.write('current CUA surface patch verification failed\n');
+  process.exit(3);
+}
+
+fs.writeFileSync(file, next);
+process.stdout.write('patched');
+'@
+
   return [pscustomobject]@{
     Fast = $fastPatcherPath
     FastUi = $fastUiPatcherPath
@@ -1689,6 +1750,7 @@ process.stdout.write('patched');
     BrowserUse = $browserUsePatcherPath
     BundledMarketplaceCopy = $bundledMarketplaceCopyPatcherPath
     NodeReplTrustedPaths = $nodeReplTrustedPathsPatcherPath
+    ComputerUseSurface = $computerUseSurfacePatcherPath
   }
 }
 
@@ -2202,6 +2264,51 @@ function Invoke-PatchAppAsar {
   Write-Log 'extracting app.asar'
   Invoke-NpxAsar 'extract' $asarPath $extractDir
   $patchers = Write-PatcherFiles $WorkDir
+
+  if ($OnlyComputerUseSurface) {
+    $viteBuildDir = Join-Path $extractDir '.vite\build'
+    if (-not (Test-Path -LiteralPath $viteBuildDir -PathType Container)) {
+      Fail "vite build directory not found in extracted asar: $viteBuildDir"
+    }
+
+    $computerUseSurfaceTarget = $null
+    foreach ($candidate in (Get-ChildItem -LiteralPath $viteBuildDir -Filter '*.js' -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)) {
+      $text = Get-Content -Raw -LiteralPath $candidate
+      if ($text.Contains('CUA_REPL_ENABLED_SURFACES') -and
+          $text.Contains('cuaReplSurfaces') -and
+          $text.Contains('computerUseNodeRepl') -and
+          $text.Contains('serviceAppPath!=null') -and
+          $text.Contains('platform===`darwin`')) {
+        $computerUseSurfaceTarget = $candidate
+        break
+      }
+    }
+    if ([string]::IsNullOrWhiteSpace($computerUseSurfaceTarget)) {
+      Fail 'could not find current Windows CUA surface-gating target in extracted main bundle'
+    }
+
+    Write-Log "Windows CUA surface patch target: $computerUseSurfaceTarget"
+    $computerUseSurface = Invoke-NodePatcher $nodePath $patchers.ComputerUseSurface @($computerUseSurfaceTarget)
+    Write-Log "Windows CUA surface patch result: $computerUseSurface"
+    & $nodePath --check $computerUseSurfaceTarget
+    if ($LASTEXITCODE -ne 0) {
+      Fail "Windows CUA surface patched asset failed node --check: $computerUseSurfaceTarget"
+    }
+    Write-Log 'Windows CUA surface patched asset syntax check passed'
+
+    if ($DryRun) {
+      Write-Log 'dry run: Windows CUA surface target validation completed; no package was changed'
+      return $false
+    }
+    if ($computerUseSurface -eq 'already-patched') {
+      Write-Log 'asar Windows CUA surface patch already present'
+      return $false
+    }
+    Write-Log 'repacking app.asar'
+    Invoke-NpxAsar 'pack' $extractDir $newAsarPath
+    Copy-Item -LiteralPath $newAsarPath -Destination $asarPath -Force
+    return $true
+  }
 
   if ($OnlyModelExperience) {
     $assetsDir = Join-Path $extractDir 'webview\assets'
