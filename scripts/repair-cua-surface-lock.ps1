@@ -29,6 +29,8 @@ Both are verified and repaired independently; `-VerifyOnly` fails while either i
 
 $ErrorActionPreference = 'Stop'
 $LogPrefix = '[cua-surface-lock]'
+if ($Install -and $Rollback) { throw 'choose either -Install or -Rollback' }
+if ($VerifyOnly -and ($Install -or $Rollback)) { throw '-VerifyOnly cannot be combined with a write mode' }
 
 $PatchProfiles = @(
   [ordered]@{
@@ -41,7 +43,6 @@ $PatchProfiles = @(
     PatchedSha256    = '4312E22A1BD77D26D02AECF3A466D256C908567D98EEA8EC93B0B45B39419175'
     # Tolerates the whitespace forms a future Desktop build may ship.
     Pattern          = '(?ms)const surfaces = new Set\(\s*\(process\.env\.CUA_REPL_ENABLED_SURFACES \?\? "browser,computer"\)\.split\(","\)\.map\(\(surface\) => surface\.trim\(\)\)\.filter\(Boolean\)\s*\);'
-    PatchedPattern   = '(?ms)const surfaces = new Set\(\[(?=[\s\S]*?CUA_SURFACE_LOCK_PATCH)[\s\S]*?\]\);'
     Anchor           = @'
 const surfaces = new Set(
     (process.env.CUA_REPL_ENABLED_SURFACES ?? "browser,computer").split(",").map((surface) => surface.trim()).filter(Boolean)
@@ -136,8 +137,10 @@ function ConvertTo-TargetNewline {
   # sources are CRLF. Emit with the target file's convention so the diff stays limited to the
   # patched region. A bare LF anywhere proves the file is LF-based; an already-patched LF file must
   # not be mistaken for CRLF just because the inserted block carries CRLF.
-  $body = $Text.TrimEnd("`r", "`n")
-  if ($Target -match "(?<!`r)`n") { return ($body -replace "`r`n", "`n") }
+  $body = $Text.TrimEnd("`r", "`n") -replace "`r`n", "`n"
+  if ($Target.Contains("`r`n") -and $Target -notmatch "(?<!`r)`n") {
+    return ($body -replace "`n", "`r`n")
+  }
   return $body
 }
 
@@ -185,20 +188,26 @@ function Get-McpJsonPaths {
 function Get-TargetState {
   param([object]$Profile, [string]$Text)
 
-  if ($Text -match [regex]::Escape($Profile.Marker)) { return 'patched' }
-  if ($Profile.UseRegex) {
-    if ([regex]::IsMatch($Text, $Profile.Pattern)) { return 'original-patchable' }
-  } elseif ($Text.Contains((ConvertTo-TargetNewline -Text $Profile.Anchor -Target $Text))) {
-    return 'original-patchable'
+  $replacement = ConvertTo-TargetNewline -Text $Profile.Replacement -Target $Text
+  $originalPattern = if ($Profile.UseRegex) {
+    $Profile.Pattern
+  } else {
+    [regex]::Escape((ConvertTo-TargetNewline -Text $Profile.Anchor -Target $Text))
   }
-  if ($Text -match [regex]::Escape($Profile.RelatedText)) { return 'unsupported' }
-  return 'not-applicable'
+  $markerCount = [regex]::Matches($Text, [regex]::Escape($Profile.Marker)).Count
+  $patchedCount = [regex]::Matches($Text, [regex]::Escape($replacement)).Count
+  $originalCount = [regex]::Matches($Text, $originalPattern).Count
+  if ($patchedCount -eq 1 -and $markerCount -eq 1 -and $originalCount -eq 0) { return 'patched' }
+  if ($markerCount -eq 0 -and $originalCount -eq 1) { return 'original-patchable' }
+  return 'unsupported'
 }
 
 function Get-PatchedText {
   param([object]$Profile, [string]$Text, [string]$Path)
 
-  if ($Text -match [regex]::Escape($Profile.Marker)) { return $Text }
+  $state = Get-TargetState -Profile $Profile -Text $Text
+  if ($state -eq 'patched') { return $Text }
+  if ($state -ne 'original-patchable') { throw "ambiguous or unsupported patch target: $Path" }
   $replacement = ConvertTo-TargetNewline -Text $Profile.Replacement -Target $Text
 
   if (-not $Profile.UseRegex) {
@@ -219,47 +228,33 @@ function Get-PatchedText {
 function Get-RestoredText {
   param([object]$Profile, [string]$Text, [string]$Path)
 
-  if ($Text -notmatch [regex]::Escape($Profile.Marker)) { return $Text }
+  if ((Get-TargetState -Profile $Profile -Text $Text) -ne 'patched') {
+    throw "patched block not recognized in $Path; restore it from a verified backup"
+  }
   $anchor = ConvertTo-TargetNewline -Text $Profile.Anchor -Target $Text
-
-  if (-not $Profile.UseRegex) {
-    $replacement = ConvertTo-TargetNewline -Text $Profile.Replacement -Target $Text
-    if (-not $Text.Contains($replacement)) {
-      throw "patched block not recognized in $Path; restore it from the adjacent backup"
-    }
-    return $Text.Replace($replacement, $anchor)
-  }
-
-  $match = [regex]::Match($Text, $Profile.PatchedPattern)
-  if (-not $match.Success) {
-    throw "patched block not recognized in $Path; restore it from the adjacent backup"
-  }
-  return $Text.Substring(0, $match.Index) + $anchor + $Text.Substring($match.Index + $match.Length)
-}
-
-function Set-McpJsonSurfaces {
-  param([string]$Path, [string]$BackupDir)
-
-  $text = Read-Text -Path $Path
-  if ($text -notmatch '"CUA_REPL_ENABLED_SURFACES"\s*:\s*"browser"') { return 'unchanged' }
-
-  New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
-  Copy-Item -LiteralPath $Path -Destination (Join-Path $BackupDir ('.mcp.json.' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.bak')) -Force
-
-  $updated = $text -replace '"CUA_REPL_ENABLED_SURFACES"\s*:\s*"browser"', '"CUA_REPL_ENABLED_SURFACES": "browser,computer"'
-  Write-TextNoBom -Path $Path -Text $updated
-  return 'flipped-to-browser,computer'
+  $replacement = ConvertTo-TargetNewline -Text $Profile.Replacement -Target $Text
+  return $Text.Replace($replacement, $anchor)
 }
 
 $report = New-Object System.Collections.Generic.List[object]
 $roots = @(Get-PluginRoots -CodexRoot $CodexHome)
 
-$launchFound = $false
+$launchFound = @($roots | Where-Object {
+  Test-Path -LiteralPath (Join-Path $_.Root 'scripts\launch.mjs') -PathType Leaf
+}).Count -gt 0
+if (-not $launchFound) {
+  throw "no supported script-based unified-computer-use layout under $CodexHome; descriptor-only layouts are unsupported and were left untouched"
+}
 foreach ($root in $roots) {
   foreach ($profile in $PatchProfiles) {
     $path = Join-Path $root.Root $profile.RelativePath
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-    if ($profile.Name -eq 'surface') { $launchFound = $true }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      $report.Add([pscustomobject]@{
+          Patch = $profile.Name; Kind = $root.Kind; Path = $path
+          State = 'missing'; Action = 'restore-required-file'; Sha256 = $null
+        })
+      continue
+    }
 
     $text = Read-Text -Path $path
     $state = Get-TargetState -Profile $profile -Text $text
@@ -272,6 +267,11 @@ foreach ($root in $roots) {
         $backup = Get-ChildItem -LiteralPath (Split-Path -Parent $path) -Filter ((Split-Path -Leaf $path) + '.bak-*') -ErrorAction SilentlyContinue |
           Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($backup) {
+          $backupText = Read-Text -Path $backup.FullName
+          if ((Get-TargetState -Profile $profile -Text $backupText) -ne 'original-patchable' -or
+              (Get-PatchedText -Profile $profile -Text $backupText -Path $backup.FullName) -cne $text) {
+            throw "target or backup changed since installation; refusing to overwrite $path"
+          }
           Copy-Item -LiteralPath $backup.FullName -Destination $path -Force
           $action = "restored-from-backup:$($backup.Name)"
         } else {
@@ -282,9 +282,11 @@ foreach ($root in $roots) {
       }
     } elseif ($Install -and $state -eq 'original-patchable') {
       if ($PSCmdlet.ShouldProcess($path, "Patch the $($profile.Name) block")) {
-        Copy-Item -LiteralPath $path -Destination ($path + '.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) -Force
+        $backupPath = $path + '.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N')
+        Copy-Item -LiteralPath $path -Destination $backupPath
         Write-TextNoBom -Path $path -Text (Get-PatchedText -Profile $profile -Text $text -Path $path)
-        $state = 'patched'
+        $state = Get-TargetState -Profile $profile -Text (Read-Text -Path $path)
+        if ($state -ne 'patched') { throw "post-write verification failed: $path" }
         $action = 'patched'
       }
     } elseif ($state -eq 'original-patchable') {
@@ -304,32 +306,22 @@ foreach ($root in $roots) {
   }
 }
 
-if (-not $launchFound) {
-  throw "no unified-computer-use launch.mjs found under $CodexHome; is the plugin installed?"
-}
-
 $mcpResults = New-Object System.Collections.Generic.List[object]
-$mcpBackupDir = Join-Path $CodexHome 'backups\cua-surface'
 foreach ($mcpPath in Get-McpJsonPaths -CodexRoot $CodexHome) {
   $before = Read-Text -Path $mcpPath
   $value = if ($before -match '"CUA_REPL_ENABLED_SURFACES"\s*:\s*"([^"]*)"') { $Matches[1] } else { $null }
   $action = 'none'
 
-  # The value is normalized only on -Install. Every other mode reports it, because `browser` here
-  # is the expected outcome of the Desktop reconcile rather than evidence of a missing repair.
-  if ($Install -and -not $Rollback -and $value -eq 'browser') {
-    if ($PSCmdlet.ShouldProcess($mcpPath, 'Normalize CUA_REPL_ENABLED_SURFACES')) {
-      $action = Set-McpJsonSurfaces -Path $mcpPath -BackupDir $mcpBackupDir
-      $value = 'browser,computer'
-    }
-  } elseif ($value -eq 'browser') {
+  # launch.mjs already forces the surface for each new server. Rewriting the generated MCP
+  # config is unnecessary and would introduce a third mutation that rollback must undo.
+  if ($value -eq 'browser') {
     $action = 'desktop-rewrites-this-on-every-launch'
   }
 
   $mcpResults.Add([pscustomobject]@{ Path = $mcpPath; Surfaces = $value; Action = $action })
 }
 
-$unpatched = @($report | Where-Object { $_.State -eq 'original-patchable' -or $_.State -eq 'unsupported' })
+$unpatched = @($report | Where-Object { $_.State -ne 'patched' })
 $ok = ($unpatched.Count -eq 0)
 
 if ($Json) {
@@ -362,7 +354,7 @@ if ($Json) {
     Write-Log ("mcp.json CUA_REPL_ENABLED_SURFACES = {0} ({1})" -f $entry.Surfaces, $entry.Path)
     if ($entry.Action -ne 'none') { Write-Log ("        action: {0}" -f $entry.Action) }
   }
-  if ($Install) {
+  if ($Install -and $ok) {
     Write-Log 'patched; start a fresh Codex conversation so a new cua_repl process reads both the new surface list and the new tool description'
   }
   if (@($report | Where-Object { $_.State -eq 'unsupported' }).Count -gt 0) {

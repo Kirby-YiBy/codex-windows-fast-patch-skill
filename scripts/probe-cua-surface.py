@@ -3,14 +3,15 @@
 This is the cheap acceptance step for the CUA surface lock case. It starts the plugin's own
 cua_repl MCP server over stdio, reads `Object.keys(cua)` out of a live kernel, and optionally
 enumerates the real app/window inventory. Run it with the environment value Desktop writes
-(`browser`); seeing `computer,getApp,listApps` under that value is what proves the forced surface
-in `scripts/launch.mjs` survives the next Desktop reconcile.
+(`browser`); seeing `computer,getApp,listApps` under that value checks the forced surface
+independently of the generated config. A real Desktop restart still needs separate validation.
 
 Usage:
   python probe-cua-surface.py [--codex-home <path>] [--surfaces browser]
                               [--skip-inventory]
 
-Exits 1 when a required surface member is missing from `Object.keys(cua)`.
+Exits 1 when guidance or a required surface member is missing, or the requested native
+window/application inventory is missing, malformed, or empty. This does not test a Desktop restart.
 """
 import argparse
 import json
@@ -169,7 +170,7 @@ def run_calls(proc, steps, timeout_per_call):
                 continue
             if step["method"] == "tools/list":
                 tools = result.get("tools", [])
-                texts.append("\n".join(tool.get("description", "") for tool in tools))
+                texts.append("\n".join(tool.get("description", "") for tool in tools if tool.get("name") == "js"))
                 continue
             texts.append("\n".join(part.get("text", "") for part in result.get("content", [])))
     finally:
@@ -183,11 +184,10 @@ def run_calls(proc, steps, timeout_per_call):
 
 
 def extract(text, marker):
-    """Pull the `MARKER=value` tail out of a tool result that also carries documentation."""
+    """Read a standalone result line, not a marker echoed inside submitted code or an error."""
     if not text:
         return None
-    flat = text.replace("\n", " ")
-    match = re.search(re.escape(marker) + r"(.{0,300})", flat)
+    match = re.search(r"(?m)^[ \t]*" + re.escape(marker) + r"([^\r\n]*)\r?$", text)
     return match.group(1).strip() if match else None
 
 
@@ -200,6 +200,8 @@ def main():
     parser.add_argument("--timeout", type=int, default=25, help="seconds to wait per call")
     parser.add_argument("--skip-inventory", action="store_true")
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
 
     mcp_json = find_mcp_json(args.codex_home)
     config = read_server_config(mcp_json)
@@ -235,7 +237,7 @@ def main():
             print(f"stderr        : {line[:200]}")
         return 1
 
-    members = keys_line.split(",")
+    members = [member.strip() for member in keys_line.split(",")]
     print(f"cua keys      : {keys_line}")
     missing = [member for member in REQUIRED_MEMBERS if member not in members]
     if missing:
@@ -244,11 +246,15 @@ def main():
     if not args.skip_inventory:
         windows_line = extract(texts[3] if len(texts) > 3 else "", "WINDOWS=")
         print(f"windows api   : {windows_line or '<no response>'}")
-        if not windows_line or windows_line.strip().split(" ")[-1] in ("0", ""):
-            failures.append("cua.computer.list_windows returned nothing")
+        windows = re.fullmatch(r"windows/([0-9]+)", windows_line or "")
+        if not windows or int(windows.group(1)) <= 0:
+            failures.append("cua.computer.list_windows did not return a positive Windows window count")
 
         inventory = extract(texts[4] if len(texts) > 4 else "", "APPS=")
         print(f"inventory     : {inventory or '<no response>'}")
+        apps = re.fullmatch(r"([0-9]+)\s+BROWSERS=([0-9]+)", inventory or "")
+        if not apps or int(apps.group(1)) <= 0:
+            failures.append("cua.getState did not return a positive application count")
 
     if failures:
         print("result        : FAIL " + "; ".join(failures))
